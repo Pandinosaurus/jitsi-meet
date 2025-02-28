@@ -17,33 +17,37 @@
 package org.jitsi.meet.sdk;
 
 import android.app.Activity;
+import android.util.Log;
 
 import androidx.annotation.Nullable;
 
+import com.facebook.hermes.reactexecutor.HermesExecutorFactory;
 import com.facebook.react.ReactInstanceManager;
 import com.facebook.react.ReactPackage;
 import com.facebook.react.bridge.NativeModule;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContext;
 import com.facebook.react.common.LifecycleState;
-import com.facebook.react.jscexecutor.JSCExecutorFactory;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 import com.facebook.react.uimanager.ViewManager;
-import com.oney.WebRTCModule.RTCVideoViewManager;
-import com.oney.WebRTCModule.WebRTCModule;
+import com.oney.WebRTCModule.EglUtils;
+import com.oney.WebRTCModule.WebRTCModuleOptions;
+import com.oney.WebRTCModule.webrtcutils.H264AndSoftwareVideoDecoderFactory;
+import com.oney.WebRTCModule.webrtcutils.H264AndSoftwareVideoEncoderFactory;
 
 import org.devio.rn.splashscreen.SplashScreenModule;
-import org.webrtc.SoftwareVideoDecoderFactory;
-import org.webrtc.SoftwareVideoEncoderFactory;
-import org.webrtc.audio.AudioDeviceModule;
-import org.webrtc.audio.JavaAudioDeviceModule;
+import org.webrtc.EglBase;
+import org.webrtc.Logging;
 
 import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 class ReactInstanceManagerHolder {
+    private static final String TAG = ReactInstanceManagerHolder.class.getSimpleName();
+
     /**
      * FIXME (from linter): Do not place Android context classes in static
      * fields (static reference to ReactInstanceManager which has field
@@ -69,34 +73,87 @@ class ReactInstanceManagerHolder {
                 new SplashScreenModule(reactContext),
                 new PictureInPictureModule(reactContext),
                 new ProximityModule(reactContext),
-                new WiFiStatsModule(reactContext),
                 new org.jitsi.meet.sdk.net.NAT64AddrInfoModule(reactContext)));
 
         if (AudioModeModule.useConnectionService()) {
             nativeModules.add(new RNConnectionService(reactContext));
         }
 
-        // Initialize the WebRTC module by hand, since we want to override some
-        // initialization options.
-        WebRTCModule.Options options = new WebRTCModule.Options();
-
-        AudioDeviceModule adm = JavaAudioDeviceModule.builder(reactContext)
-            .createAudioDeviceModule();
-        options.setAudioDeviceModule(adm);
-
-        options.setVideoDecoderFactory(new SoftwareVideoDecoderFactory());
-        options.setVideoEncoderFactory(new SoftwareVideoEncoderFactory());
-
-        nativeModules.add(new WebRTCModule(reactContext, options));
-
         return nativeModules;
     }
 
     private static List<ViewManager> createViewManagers(ReactApplicationContext reactContext) {
-        return Arrays.<ViewManager>asList(
-            // WebRTC, see createNativeModules for details.
-            new RTCVideoViewManager()
-        );
+        return Collections.emptyList();
+    }
+
+    static List<ReactPackage> getReactNativePackages() {
+        List<ReactPackage> packages
+            = new ArrayList<>(Arrays.asList(
+            new com.reactnativecommunity.asyncstorage.AsyncStoragePackage(),
+            new com.ocetnik.timer.BackgroundTimerPackage(),
+            new com.calendarevents.RNCalendarEventsPackage(),
+            new com.corbt.keepawake.KCKeepAwakePackage(),
+            new com.facebook.react.shell.MainReactPackage(),
+            new com.reactnativecommunity.clipboard.ClipboardPackage(),
+            new com.reactnativecommunity.netinfo.NetInfoPackage(),
+            new com.reactnativepagerview.PagerViewPackage(),
+            new com.oblador.performance.PerformancePackage(),
+            new com.reactnativecommunity.slider.ReactSliderPackage(),
+            new com.brentvatne.react.ReactVideoPackage(),
+            new com.reactnativecommunity.webview.RNCWebViewPackage(),
+            new com.kevinresol.react_native_default_preference.RNDefaultPreferencePackage(),
+            new com.learnium.RNDeviceInfo.RNDeviceInfo(),
+            new com.oney.WebRTCModule.WebRTCModulePackage(),
+            new com.swmansion.gesturehandler.RNGestureHandlerPackage(),
+            new org.linusu.RNGetRandomValuesPackage(),
+            new com.rnimmersivemode.RNImmersiveModePackage(),
+            new com.swmansion.rnscreens.RNScreensPackage(),
+            new com.zmxv.RNSound.RNSoundPackage(),
+            new com.th3rdwave.safeareacontext.SafeAreaContextPackage(),
+            new com.horcrux.svg.SvgPackage(),
+            new org.wonday.orientation.OrientationPackage(),
+            new ReactPackageAdapter() {
+                @Override
+                public List<NativeModule> createNativeModules(ReactApplicationContext reactContext) {
+                    return ReactInstanceManagerHolder.createNativeModules(reactContext);
+                }
+                @Override
+                public List<ViewManager> createViewManagers(ReactApplicationContext reactContext) {
+                    return ReactInstanceManagerHolder.createViewManagers(reactContext);
+                }
+            }));
+
+        // AmplitudeReactNativePackage
+        try {
+            Class<?> amplitudePackageClass = Class.forName("com.amplitude.reactnative.AmplitudeReactNativePackage");
+            Constructor constructor = amplitudePackageClass.getConstructor();
+            packages.add((ReactPackage)constructor.newInstance());
+        } catch (Exception e) {
+            // Ignore any error, the module is not compiled when LIBRE_BUILD is enabled.
+            Log.d(TAG, "Not loading AmplitudeReactNativePackage");
+        }
+
+        // GiphyReactNativeSdkPackage
+        try {
+            Class<?> giphyPackageClass = Class.forName("com.giphyreactnativesdk.GiphyReactNativeSdkPackage");
+            Constructor constructor = giphyPackageClass.getConstructor();
+            packages.add((ReactPackage)constructor.newInstance());
+        } catch (Exception e) {
+            // Ignore any error, the module is not compiled when LIBRE_BUILD is enabled.
+            Log.d(TAG, "Not loading GiphyReactNativeSdkPackage");
+        }
+
+        // RNGoogleSignInPackage
+        try {
+            Class<?> googlePackageClass = Class.forName("com.reactnativegooglesignin.RNGoogleSigninPackage");
+            Constructor constructor = googlePackageClass.getConstructor();
+            packages.add((ReactPackage)constructor.newInstance());
+        } catch (Exception e) {
+            // Ignore any error, the module is not compiled when LIBRE_BUILD is enabled.
+            Log.d(TAG, "Not loading RNGoogleSignInPackage");
+        }
+
+        return packages;
     }
 
     /**
@@ -143,18 +200,6 @@ class ReactInstanceManagerHolder {
                 ? reactContext.getNativeModule(nativeModuleClass) : null;
     }
 
-    /**
-     * Gets the current {@link Activity} linked to React Native.
-     *
-     * @return An activity attached to React Native.
-     */
-    static Activity getCurrentActivity() {
-        ReactContext reactContext
-            = reactInstanceManager != null
-            ? reactInstanceManager.getCurrentReactContext() : null;
-        return reactContext != null ? reactContext.getCurrentActivity() : null;
-    }
-
     static ReactInstanceManager getReactInstanceManager() {
         return reactInstanceManager;
     }
@@ -172,63 +217,17 @@ class ReactInstanceManagerHolder {
             return;
         }
 
-        List<ReactPackage> packages
-            = new ArrayList<>(Arrays.asList(
-                new com.reactnativecommunity.asyncstorage.AsyncStoragePackage(),
-                new com.ocetnik.timer.BackgroundTimerPackage(),
-                new com.calendarevents.RNCalendarEventsPackage(),
-                new com.corbt.keepawake.KCKeepAwakePackage(),
-                new com.facebook.react.shell.MainReactPackage(),
-                new com.reactnativecommunity.clipboard.ClipboardPackage(),
-                new com.reactnativecommunity.netinfo.NetInfoPackage(),
-                new com.reactnativepagerview.PagerViewPackage(),
-                new com.oblador.performance.PerformancePackage(),
-                new com.reactnativecommunity.slider.ReactSliderPackage(),
-                new com.brentvatne.react.ReactVideoPackage(),
-                new com.swmansion.reanimated.ReanimatedPackage(),
-                new org.reactnative.maskedview.RNCMaskedViewPackage(),
-                new com.reactnativecommunity.webview.RNCWebViewPackage(),
-                new com.kevinresol.react_native_default_preference.RNDefaultPreferencePackage(),
-                new com.learnium.RNDeviceInfo.RNDeviceInfo(),
-                new com.swmansion.gesturehandler.react.RNGestureHandlerPackage(),
-                new org.linusu.RNGetRandomValuesPackage(),
-                new com.rnimmersive.RNImmersivePackage(),
-                new com.swmansion.rnscreens.RNScreensPackage(),
-                new com.zmxv.RNSound.RNSoundPackage(),
-                new com.th3rdwave.safeareacontext.SafeAreaContextPackage(),
-                new com.horcrux.svg.SvgPackage(),
-                new ReactPackageAdapter() {
-                    @Override
-                    public List<NativeModule> createNativeModules(ReactApplicationContext reactContext) {
-                        return ReactInstanceManagerHolder.createNativeModules(reactContext);
-                    }
-                    @Override
-                    public List<ViewManager> createViewManagers(ReactApplicationContext reactContext) {
-                        return ReactInstanceManagerHolder.createViewManagers(reactContext);
-                    }
-                }));
+        // Initialize the WebRTC module options.
+        WebRTCModuleOptions options = WebRTCModuleOptions.getInstance();
 
-        // AmplitudeReactNativePackage
-        try {
-            Class<?> amplitudePackageClass = Class.forName("com.amplitude.reactnative.AmplitudeReactNativePackage");
-            Constructor constructor = amplitudePackageClass.getConstructor();
-            packages.add((ReactPackage)constructor.newInstance());
-        } catch (Exception e) {
-            // Ignore any error, the module is not compiled when LIBRE_BUILD is enabled.
-        }
+        EglBase.Context eglContext = EglUtils.getRootEglBaseContext();
 
-        // RNGoogleSigninPackage
-        try {
-            Class<?> googlePackageClass = Class.forName("com.reactnativegooglesignin.RNGoogleSigninPackage");
-            Constructor constructor = googlePackageClass.getConstructor();
-            packages.add((ReactPackage)constructor.newInstance());
-        } catch (Exception e) {
-            // Ignore any error, the module is not compiled when LIBRE_BUILD is enabled.
-        }
+        options.videoDecoderFactory = new H264AndSoftwareVideoDecoderFactory(eglContext);
+        options.videoEncoderFactory = new H264AndSoftwareVideoEncoderFactory(eglContext);
+        options.enableMediaProjectionService = true;
+//      options.loggingSeverity = Logging.Severity.LS_INFO;
 
-        // Keep on using JSC, the jury is out on Hermes.
-        JSCExecutorFactory jsFactory
-            = new JSCExecutorFactory("", "");
+        Log.d(TAG, "initializing RN with Activity");
 
         reactInstanceManager
             = ReactInstanceManager.builder()
@@ -236,13 +235,10 @@ class ReactInstanceManagerHolder {
                 .setCurrentActivity(activity)
                 .setBundleAssetName("index.android.bundle")
                 .setJSMainModulePath("index.android")
-                .setJavaScriptExecutorFactory(jsFactory)
-                .addPackages(packages)
+                .setJavaScriptExecutorFactory(new HermesExecutorFactory())
+                .addPackages(getReactNativePackages())
                 .setUseDeveloperSupport(BuildConfig.DEBUG)
                 .setInitialLifecycleState(LifecycleState.RESUMED)
                 .build();
-
-        // Register our uncaught exception handler.
-        JitsiMeetUncaughtExceptionHandler.register();
     }
 }

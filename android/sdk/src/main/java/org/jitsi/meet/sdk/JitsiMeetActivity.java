@@ -16,10 +16,13 @@
 
 package org.jitsi.meet.sdk;
 
+import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Bundle;
 
@@ -32,11 +35,16 @@ import com.facebook.react.modules.core.PermissionListener;
 import org.jitsi.meet.sdk.log.JitsiMeetLogger;
 
 import java.util.HashMap;
-import android.app.Activity;
 
 /**
- * A base activity for SDK users to embed. It uses {@link JitsiMeetFragment} to do the heavy
- * lifting and wires the remaining Activity lifecycle methods so it works out of the box.
+ * A base activity for SDK users to embed.  It contains all the required wiring
+ * between the {@code JitsiMeetView} and the Activity lifecycle methods.
+ *
+ * In this activity we use a single {@code JitsiMeetView} instance. This
+ * instance gives us access to a view which displays the welcome page and the
+ * conference itself. All lifecycle methods associated with this Activity are
+ * hooked to the React Native subsystem via proxy calls through the
+ * {@code JitsiMeetActivityDelegate} static methods.
  */
 public class JitsiMeetActivity extends AppCompatActivity
     implements JitsiMeetActivityInterface {
@@ -46,12 +54,20 @@ public class JitsiMeetActivity extends AppCompatActivity
     private static final String ACTION_JITSI_MEET_CONFERENCE = "org.jitsi.meet.CONFERENCE";
     private static final String JITSI_MEET_CONFERENCE_OPTIONS = "JitsiMeetConferenceOptions";
 
+    private boolean isReadyToClose;
+
     private final BroadcastReceiver broadcastReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             onBroadcastReceived(intent);
         }
     };
+
+    /**
+     * Instance of the {@link JitsiMeetView} which this activity will display.
+     */
+    private JitsiMeetView jitsiView;
+
     // Helpers for starting the activity
     //
 
@@ -75,10 +91,19 @@ public class JitsiMeetActivity extends AppCompatActivity
     //
 
     @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        Intent intent = new Intent("onConfigurationChanged");
+        intent.putExtra("newConfig", newConfig);
+        this.sendBroadcast(intent);
+    }
+
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         setContentView(R.layout.activity_jitsi_meet);
+        this.jitsiView = findViewById(R.id.jitsiView);
 
         registerForBroadcastMessages();
 
@@ -88,7 +113,21 @@ public class JitsiMeetActivity extends AppCompatActivity
     }
 
     @Override
+    public void onResume() {
+        super.onResume();
+        JitsiMeetActivityDelegate.onHostResume(this);
+    }
+
+    @Override
+    public void onStop() {
+        JitsiMeetActivityDelegate.onHostPause(this);
+        super.onStop();
+    }
+
+    @Override
     public void onDestroy() {
+        JitsiMeetLogger.i("onDestroy()");
+
         // Here we are trying to handle the following corner case: an application using the SDK
         // is using this Activity for displaying meetings, but there is another "main" Activity
         // with other content. If this Activity is "swiped out" from the recent list we will get
@@ -96,7 +135,13 @@ public class JitsiMeetActivity extends AppCompatActivity
         // current meeting, but when our view is detached from React the JS <-> Native bridge won't
         // be operational so the external API won't be able to notify the native side that the
         // conference terminated. Thus, try our best to clean up.
-        leave();
+        if (!isReadyToClose) {
+            JitsiMeetLogger.i("onDestroy(): leaving...");
+            leave();
+        }
+
+        this.jitsiView = null;
+
         if (AudioModeModule.useConnectionService()) {
             ConnectionService.abortConnections();
         }
@@ -104,13 +149,19 @@ public class JitsiMeetActivity extends AppCompatActivity
 
         LocalBroadcastManager.getInstance(this).unregisterReceiver(broadcastReceiver);
 
+        JitsiMeetActivityDelegate.onHostDestroy(this);
+
         super.onDestroy();
     }
 
     @Override
     public void finish() {
-        leave();
+        if (!isReadyToClose) {
+            JitsiMeetLogger.i("finish(): leaving...");
+            leave();
+        }
 
+        JitsiMeetLogger.i("finish(): finishing...");
         super.finish();
     }
 
@@ -118,9 +169,7 @@ public class JitsiMeetActivity extends AppCompatActivity
     //
 
     protected JitsiMeetView getJitsiView() {
-        JitsiMeetFragment fragment
-            = (JitsiMeetFragment) getSupportFragmentManager().findFragmentById(R.id.jitsiFragment);
-        return fragment != null ? fragment.getJitsiView() : null;
+        return jitsiView;
     }
 
     public void join(@Nullable String url) {
@@ -132,20 +181,16 @@ public class JitsiMeetActivity extends AppCompatActivity
     }
 
     public void join(JitsiMeetConferenceOptions options) {
-        JitsiMeetView view = getJitsiView();
-
-        if (view != null) {
-            view.join(options);
+        if (this.jitsiView != null) {
+            this.jitsiView.join(options);
         } else {
             JitsiMeetLogger.w("Cannot join, view is null");
         }
     }
 
-    public void leave() {
-        JitsiMeetView view = getJitsiView();
-
-        if (view != null) {
-            view.leave();
+    protected void leave() {
+        if (this.jitsiView != null) {
+            this.jitsiView.abort();
         } else {
             JitsiMeetLogger.w("Cannot leave, view is null");
         }
@@ -189,7 +234,7 @@ public class JitsiMeetActivity extends AppCompatActivity
     protected void onConferenceJoined(HashMap<String, Object> extraData) {
         JitsiMeetLogger.i("Conference joined: " + extraData);
         // Launch the service for the ongoing notification.
-        JitsiMeetOngoingConferenceService.launch(this);
+        JitsiMeetOngoingConferenceService.launch(this, extraData);
     }
 
     protected void onConferenceTerminated(HashMap<String, Object> extraData) {
@@ -218,8 +263,17 @@ public class JitsiMeetActivity extends AppCompatActivity
 
     protected void onReadyToClose() {
         JitsiMeetLogger.i("SDK is ready to close");
+        isReadyToClose = true;
         finish();
     }
+
+//    protected void onTranscriptionChunkReceived(HashMap<String, Object> extraData) {
+//        JitsiMeetLogger.i("Transcription chunk received: " + extraData);
+//    }
+
+//    protected void onCustomButtonPressed(HashMap<String, Object> extraData) {
+//        JitsiMeetLogger.i("Custom button pressed: " + extraData);
+//    }
 
     // Activity lifecycle methods
     //
@@ -252,10 +306,8 @@ public class JitsiMeetActivity extends AppCompatActivity
 
     @Override
     protected void onUserLeaveHint() {
-        JitsiMeetView view = getJitsiView();
-
-        if (view != null) {
-            view.enterPictureInPicture();
+        if (this.jitsiView != null) {
+            this.jitsiView.enterPictureInPicture();
         }
     }
 
@@ -267,6 +319,7 @@ public class JitsiMeetActivity extends AppCompatActivity
         JitsiMeetActivityDelegate.requestPermissions(this, permissions, requestCode, listener);
     }
 
+    @SuppressLint("MissingSuperCall")
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         JitsiMeetActivityDelegate.onRequestPermissionsResult(requestCode, permissions, grantResults);
@@ -305,6 +358,12 @@ public class JitsiMeetActivity extends AppCompatActivity
                 case READY_TO_CLOSE:
                     onReadyToClose();
                     break;
+//                case TRANSCRIPTION_CHUNK_RECEIVED:
+//                    onTranscriptionChunkReceived(event.getData());
+//                    break;
+//                case CUSTOM_BUTTON_PRESSED:
+//                    onCustomButtonPressed(event.getData());
+//                    break;
             }
         }
     }

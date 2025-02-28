@@ -15,7 +15,6 @@
  */
 
 #import "ExternalAPI.h"
-#import "JitsiMeetView+Private.h"
 
 // Events
 static NSString * const hangUpAction = @"org.jitsi.meet.HANG_UP";
@@ -27,6 +26,12 @@ static NSString * const openChatAction = @"org.jitsi.meet.OPEN_CHAT";
 static NSString * const closeChatAction = @"org.jitsi.meet.CLOSE_CHAT";
 static NSString * const sendChatMessageAction = @"org.jitsi.meet.SEND_CHAT_MESSAGE";
 static NSString * const setVideoMutedAction = @"org.jitsi.meet.SET_VIDEO_MUTED";
+static NSString * const setClosedCaptionsEnabledAction = @"org.jitsi.meet.SET_CLOSED_CAPTIONS_ENABLED";
+static NSString * const toggleCameraAction = @"org.jitsi.meet.TOGGLE_CAMERA";
+static NSString * const showNotificationAction = @"org.jitsi.meet.SHOW_NOTIFICATION";
+static NSString * const hideNotificationAction = @"org.jitsi.meet.HIDE_NOTIFICATION";
+static NSString * const startRecordingAction = @"org.jitsi.meet.START_RECORDING";
+static NSString * const stopRecordingAction = @"org.jitsi.meet.STOP_RECORDING";
 
 @implementation ExternalAPI
 
@@ -49,7 +54,13 @@ RCT_EXPORT_MODULE();
         @"OPEN_CHAT": openChatAction,
         @"CLOSE_CHAT": closeChatAction,
         @"SEND_CHAT_MESSAGE": sendChatMessageAction,
-        @"SET_VIDEO_MUTED" : setVideoMutedAction
+        @"SET_VIDEO_MUTED" : setVideoMutedAction,
+        @"SET_CLOSED_CAPTIONS_ENABLED": setClosedCaptionsEnabledAction,
+        @"TOGGLE_CAMERA": toggleCameraAction,
+        @"SHOW_NOTIFICATION": showNotificationAction,
+        @"HIDE_NOTIFICATION": hideNotificationAction,
+        @"START_RECORDING": startRecordingAction,
+        @"STOP_RECORDING": stopRecordingAction
     };
 };
 
@@ -73,7 +84,13 @@ RCT_EXPORT_MODULE();
               openChatAction,
               closeChatAction,
               sendChatMessageAction,
-              setVideoMutedAction
+              setVideoMutedAction,
+              setClosedCaptionsEnabledAction,
+              toggleCameraAction,
+              showNotificationAction,
+              hideNotificationAction,
+              startRecordingAction,
+              stopRecordingAction
     ];
 }
 
@@ -86,33 +103,15 @@ RCT_EXPORT_MODULE();
  * @param scope
  */
 RCT_EXPORT_METHOD(sendEvent:(NSString *)name
-                       data:(NSDictionary *)data
-                      scope:(NSString *)scope) {
-    // The JavaScript App needs to provide uniquely identifying information to
-    // the native ExternalAPI module so that the latter may match the former
-    // to the native JitsiMeetView which hosts it.
-    JitsiMeetView *view = [JitsiMeetView viewForExternalAPIScope:scope];
-
-    if (!view) {
-        return;
-    }
-
-    id delegate = view.delegate;
-
-    if (!delegate) {
-        return;
-    }
-    
+                       data:(NSDictionary *)data) {
     if ([name isEqual: @"PARTICIPANTS_INFO_RETRIEVED"]) {
         [self onParticipantsInfoRetrieved: data];
         return;
     }
-
-    SEL sel = NSSelectorFromString([self methodNameFromEventName:name]);
-
-    if (sel && [delegate respondsToSelector:sel]) {
-        [delegate performSelector:sel withObject:data];
-    }
+    
+    [[NSNotificationCenter defaultCenter] postNotificationName:sendEventNotificationName
+                                                        object:nil
+                                                      userInfo:@{@"name": name, @"data": data}];
 }
 
 - (void) onParticipantsInfoRetrieved:(NSDictionary *)data {
@@ -122,28 +121,6 @@ RCT_EXPORT_METHOD(sendEvent:(NSString *)name
     void (^completionHandler)(NSArray*) = [participantInfoCompletionHandlers objectForKey:completionHandlerId];
     completionHandler(participantsInfoArray);
     [participantInfoCompletionHandlers removeObjectForKey:completionHandlerId];
-}
-
-/**
- * Converts a specific event name i.e. redux action type description to a
- * method name.
- *
- * @param eventName The event name to convert to a method name.
- * @return A method name constructed from the specified `eventName`.
- */
-- (NSString *)methodNameFromEventName:(NSString *)eventName {
-   NSMutableString *methodName
-       = [NSMutableString stringWithCapacity:eventName.length];
-
-   for (NSString *c in [eventName componentsSeparatedByString:@"_"]) {
-       if (c.length) {
-           [methodName appendString:
-               methodName.length ? c.capitalizedString : c.lowercaseString];
-       }
-   }
-   [methodName appendString:@":"];
-
-   return methodName;
 }
 
 - (void)sendHangUp {
@@ -205,5 +182,69 @@ RCT_EXPORT_METHOD(sendEvent:(NSString *)name
     [self sendEventWithName:setVideoMutedAction body:data];
 }
 
+- (void)sendSetClosedCaptionsEnabled:(BOOL)enabled {
+    NSDictionary *data = @{ @"enabled": [NSNumber numberWithBool:enabled]};
 
+    [self sendEventWithName:setClosedCaptionsEnabledAction body:data];
+}
+
+- (void)toggleCamera {
+    [self sendEventWithName:toggleCameraAction body:nil];
+}
+
+- (void)showNotification:(NSString*)appearance :(NSString*)description :(NSString*)timeout :(NSString*)title :(NSString*)uid {
+    NSMutableDictionary *data = [[NSMutableDictionary alloc] init];
+    data[@"appearance"] = appearance;
+    data[@"description"] = description;
+    data[@"timeout"] = timeout;
+    data[@"title"] = title;
+    data[@"uid"] = uid;
+    
+    [self sendEventWithName:showNotificationAction body:data];
+}
+
+- (void)hideNotification:(NSString*)uid {
+    NSMutableDictionary *data = [[NSMutableDictionary alloc] init];
+    data[@"uid"] = uid;
+    
+    [self sendEventWithName:hideNotificationAction body:data];
+}
+
+static inline NSString *RecordingModeToString(RecordingMode mode) {
+    switch (mode) {
+        case RecordingModeFile:
+            return @"file";
+        case RecordingModeStream:
+            return @"stream";
+        default:
+            return nil;
+    }
+}
+
+- (void)startRecording:(RecordingMode)mode :(NSString*)dropboxToken :(BOOL)shouldShare :(NSString*)rtmpStreamKey :(NSString*)rtmpBroadcastID :(NSString*)youtubeStreamKey :(NSString*)youtubeBroadcastID :(NSDictionary*)extraMetadata :(BOOL)transcription {
+    NSString *modeString = RecordingModeToString(mode);
+    NSDictionary *data = @{
+        @"mode": modeString,
+        @"dropboxToken": dropboxToken,
+        @"shouldShare": @(shouldShare),
+        @"rtmpStreamKey": rtmpStreamKey,
+        @"rtmpBroadcastID": rtmpBroadcastID,
+        @"youtubeStreamKey": youtubeStreamKey,
+        @"youtubeBroadcastID": youtubeBroadcastID,
+        @"extraMetadata": extraMetadata,
+        @"transcription": @(transcription)
+    };
+    
+    [self sendEventWithName:startRecordingAction body:data];
+}
+
+- (void)stopRecording:(RecordingMode)mode :(BOOL)transcription {
+    NSString *modeString = RecordingModeToString(mode);
+    NSDictionary *data = @{
+        @"mode": modeString,
+        @"transcription": @(transcription)
+    };
+    
+    [self sendEventWithName:stopRecordingAction body:data];
+}
 @end

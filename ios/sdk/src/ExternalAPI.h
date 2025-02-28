@@ -16,6 +16,13 @@
 #import <React/RCTBridgeModule.h>
 #import <React/RCTEventEmitter.h>
 
+static NSString * const sendEventNotificationName = @"org.jitsi.meet.SendEvent";
+
+typedef NS_ENUM(NSInteger, RecordingMode) {
+    RecordingModeFile,
+    RecordingModeStream
+};
+
 @interface ExternalAPI : RCTEventEmitter<RCTBridgeModule>
 
 - (void)sendHangUp;
@@ -25,7 +32,13 @@
 - (void)retrieveParticipantsInfo:(void (^)(NSArray*))completion;
 - (void)openChat:(NSString*)to;
 - (void)closeChat;
-- (void)sendChatMessage:(NSString*)message :(NSString*)to ;
+- (void)sendChatMessage:(NSString*)message :(NSString*)to;
 - (void)sendSetVideoMuted:(BOOL)muted;
+- (void)sendSetClosedCaptionsEnabled:(BOOL)enabled;
+- (void)toggleCamera;
+- (void)showNotification:(NSString*)appearance :(NSString*)description :(NSString*)timeout :(NSString*)title :(NSString*)uid;
+- (void)hideNotification:(NSString*)uid;
+- (void)startRecording:(RecordingMode)mode :(NSString*)dropboxToken :(BOOL)shouldShare :(NSString*)rtmpStreamKey :(NSString*)rtmpBroadcastID :(NSString*)youtubeStreamKey :(NSString*)youtubeBroadcastID :(NSDictionary*)extraMetadata :(BOOL)transcription;
+- (void)stopRecording:(RecordingMode)mode :(BOOL)transcription;
 
 @end
